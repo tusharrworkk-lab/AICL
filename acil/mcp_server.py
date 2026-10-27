@@ -6,16 +6,21 @@ from mcp.server.fastmcp import FastMCP
 from sqlalchemy import select
 
 from acil.auth import authenticate_api_key
+from acil.background_judge import (
+    create_queued_global_evaluation,
+    enqueue_global_evaluation,
+    resume_pending_global_evaluations,
+)
 from acil.config import get_settings
 from acil.context import compile_context
 from acil.db import SessionLocal
 from acil.failures import failure_fingerprint
-from acil.global_evaluations import run_global_evaluation
 from acil.judge import redact_evidence
 from acil.main import persist_event
 from acil.models import (
     FailurePattern,
     GlobalEvaluationDefinition,
+    GlobalEvaluationRun,
     GlobalFailurePattern,
     Project,
     StrategyCandidate,
@@ -237,6 +242,9 @@ def report_failure_for_review(
             "tenant_id": str(persisted.tenant_id),
             "project_id": str(persisted.project_id),
             "status": persisted.status,
+            "canonical_action": persisted.canonical_action,
+            "error_type": persisted.error_type,
+            "api_target": persisted.attributes.get("api_target"),
             "bedrock_judgment": {"requested": request_bedrock_judgment, "status": "not_requested"},
         }
         if not request_bedrock_judgment:
@@ -272,44 +280,61 @@ def report_failure_for_review(
             }
             return result
 
-        try:
-            run = run_global_evaluation(
-                definition=definition,
-                observed_actions=observed_actions or [persisted.canonical_action],
-                outcome="failure",
-                evidence={
-                    "event_id": persisted.event_id,
-                    "trace_id": persisted.trace_id,
-                    "canonical_action": persisted.canonical_action,
-                    "error_type": persisted.error_type,
-                    "codex_failure_report": reported_evidence,
-                },
-                db=db,
-                tenant_id=ctx.tenant_id,
-                judge_provider="bedrock",
-            )
-            db.commit()
-            db.refresh(run)
-        except RuntimeError as exc:
-            result["bedrock_judgment"] = {
-                "requested": True,
-                "status": "unavailable",
-                "reason": str(exc),
-            }
-            return result
+        run = create_queued_global_evaluation(
+            definition=definition,
+            tenant_id=ctx.tenant_id,
+            observed_actions=observed_actions or [persisted.canonical_action],
+            evidence={
+                "event_id": persisted.event_id,
+                "trace_id": persisted.trace_id,
+                "canonical_action": persisted.canonical_action,
+                "error_type": persisted.error_type,
+                "codex_failure_report": reported_evidence,
+            },
+            db=db,
+        )
+        db.commit()
+        db.refresh(run)
+        enqueue_global_evaluation(run.id)
 
         result["bedrock_judgment"] = {
             "requested": True,
-            "status": "completed",
+            "status": "queued",
             "run_id": str(run.id),
-            "passed": run.passed,
-            "reliability_score": run.metrics.get("reliability_score"),
-            "blockers": run.blockers,
-            "negative_case_analysis": run.metrics.get("negative_case_analysis", []),
-            "user_action_requests": run.metrics.get("user_action_requests", []),
+            "message": "Bedrock judgment is running asynchronously; Codex does not need to wait.",
         }
         return result
 
 
+@mcp.tool()
+def get_judge_run_status(run_id: str, api_key: str | None = None) -> dict:
+    """Get the tenant-private status and final evidence for an asynchronous judge run."""
+    with SessionLocal() as db:
+        ctx = _context(api_key, db)
+        run = db.scalar(
+            select(GlobalEvaluationRun).where(
+                GlobalEvaluationRun.id == UUID(run_id),
+                GlobalEvaluationRun.tenant_id == ctx.tenant_id,
+            )
+        )
+        if run is None:
+            raise ValueError("Judge run not found")
+        return {
+            "run_id": str(run.id),
+            "definition_id": str(run.definition_id),
+            "judge_provider": run.judge_provider,
+            "status": run.status,
+            "passed": run.passed if run.status in {"PASSED", "FAILED"} else None,
+            "reliability_score": (run.metrics or {}).get("reliability_score"),
+            "blockers": run.blockers,
+            "negative_case_analysis": (run.metrics or {}).get(
+                "negative_case_analysis", []
+            ),
+            "user_action_requests": (run.metrics or {}).get("user_action_requests", []),
+            "created_at": run.created_at.isoformat(),
+        }
+
+
 if __name__ == "__main__":
+    resume_pending_global_evaluations()
     mcp.run()

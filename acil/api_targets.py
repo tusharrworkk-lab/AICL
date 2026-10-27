@@ -9,6 +9,18 @@ _UUID_SEGMENT = re.compile(
     re.IGNORECASE,
 )
 _NUMBER_SEGMENT = re.compile(r"^\d+$")
+_URL_IN_TEXT = re.compile(r"https?://[^\s\"'<>]+", re.IGNORECASE)
+_OBSERVED_FIELDS = (
+    "command",
+    "cmd",
+    "arguments",
+    "input",
+    "output",
+    "result",
+    "error",
+    "request",
+    "response",
+)
 
 
 def normalize_api_target(raw_url: object) -> dict | None:
@@ -40,13 +52,28 @@ def normalize_api_target(raw_url: object) -> dict | None:
 
 
 def extract_api_target(attributes: dict) -> tuple[dict, dict | None]:
-    """Remove raw URL fields and return safe attributes plus a normalized target."""
+    """Extract a safe target from explicit URLs or observable tool text.
+
+    Coding-agent events frequently report a shell command instead of a separate
+    URL field. We inspect bounded observable fields for literal HTTP(S) URLs,
+    then remove those fields before persistence so commands and responses are
+    not retained as raw evidence.
+    """
     cleaned = dict(attributes)
     raw_url = None
     for key in ("api_url", "request_url", "url", "endpoint"):
         value = cleaned.pop(key, None)
         if raw_url is None:
             raw_url = value
+    if raw_url is None:
+        for key in _OBSERVED_FIELDS:
+            value = cleaned.get(key)
+            candidates = _URL_IN_TEXT.findall(value) if isinstance(value, str) else []
+            if candidates:
+                raw_url = candidates[0].rstrip(".,;:!?)]}")
+                break
+    for key in _OBSERVED_FIELDS:
+        cleaned.pop(key, None)
     target = normalize_api_target(raw_url)
     if target is not None:
         cleaned["api_target"] = target

@@ -32,17 +32,21 @@
         <div class="content">
           <section class="hero">
             <div><p class="eyebrow">ACTIVE PROJECT</p><h1 id="project-title">Select a project</h1><p id="project-description">ACIL turns observed agent execution into validated, reusable context.</p></div>
-            <div class="hero-actions"><button id="inject-demo" class="secondary" disabled>Inject demo failure</button><button id="compile-context" class="primary" disabled>Compile context</button></div>
           </section>
 
-          <section class="metrics">
+          <nav class="tabbar" aria-label="Console views">
+            <button class="tab active" data-tab="overview">Execution overview</button>
+            <button class="tab" data-tab="judge">LLM as judge</button>
+          </nav>
+
+          <section class="metrics" data-tab-panel="overview">
             <article><span>OBSERVED EVENTS</span><strong id="metric-events">—</strong><small>append-only evidence</small></article>
             <article><span>FAILURE PATTERNS</span><strong id="metric-failures">—</strong><small>deterministic fingerprints</small></article>
             <article><span>VALIDATED / ACTIVE</span><strong id="metric-strategies">—</strong><small>operational knowledge</small></article>
             <article><span>EVALUATIONS</span><strong id="metric-evaluations">—</strong><small>candidate → evidence</small></article>
           </section>
 
-          <section class="grid">
+          <section class="grid" data-tab-panel="overview">
             <article class="panel logs-panel">
               <div class="panel-title"><div><span class="status-light"></span>LIVE EXECUTION LOG</div><small>newest first · observed only</small></div>
               <div id="logs" class="logs"><div class="empty">Select a project to inspect its trace evidence.</div></div>
@@ -53,23 +57,19 @@
             </article>
           </section>
 
-          <section class="grid lower-grid">
+          <section class="grid lower-grid" data-tab-panel="overview">
             <article class="panel">
-              <div class="panel-title"><div>STRATEGY REGISTRY</div><small>must validate before activation</small></div>
-              <div id="strategies" class="stack"><div class="empty">No strategies yet.</div></div>
-            </article>
-            <article class="panel context-panel">
-              <div class="panel-title"><div>COMPILED CONTEXT</div><small>lower-trust agent input</small></div>
-              <pre id="context-output" class="context-output">// Compile a context package to inspect exactly what an agent receives.</pre>
+              <div class="panel-title"><div>VALIDATED KNOWLEDGE</div><small>validated or active strategies only</small></div>
+              <div id="strategies" class="stack"><div class="empty">No validated strategies yet.</div></div>
             </article>
           </section>
 
-          <section class="panel judge-panel">
-            <div class="panel-title"><div><span id="judge-light" class="status-light muted-light"></span>BEDROCK EVALUATION RUNTIME</div><small id="judge-state">Connect to inspect runtime</small></div>
+          <section class="panel judge-panel tab-hidden" data-tab-panel="judge">
+            <div class="panel-title"><div><span id="judge-light" class="status-light muted-light"></span>LLM AS JUDGE RUNTIME</div><div class="panel-tools"><small id="judge-state">Connect to inspect runtime</small><button id="refresh-judge" class="text-btn" title="Refresh judge status">↻</button></div></div>
             <div id="judge-runtime" class="judge-runtime"><div class="empty">Bedrock credential details are never shown to unauthenticated users.</div></div>
           </section>
 
-          <section class="panel">
+          <section class="panel tab-hidden" data-tab-panel="judge">
             <div class="panel-title"><div>TENANT NEGATIVE-CASE ANALYSIS</div><small>evidence-backed judge findings · private to this tenant</small></div>
             <div id="negative-cases" class="stack"><div class="empty">Connect to load judge findings. A model evaluation is never run automatically.</div></div>
           </section>

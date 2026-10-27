@@ -93,7 +93,10 @@ def persist_event(payload: EventIn, ctx: TenantContext, db: Session) -> Executio
     )
     if existing is not None:
         return existing
-    attributes = redact_attributes(payload.attributes)
+    attributes = dict(payload.attributes)
+    if payload.api_url and "api_url" not in attributes:
+        attributes["api_url"] = payload.api_url
+    attributes = redact_attributes(attributes)
     attributes, _ = extract_api_target(attributes)
     if len(str(attributes).encode()) > MAX_ATTRIBUTES_BYTES:
         raise HTTPException(status_code=413, detail="Event attributes exceed payload limit")
@@ -110,7 +113,9 @@ def persist_event(payload: EventIn, ctx: TenantContext, db: Session) -> Executio
     elif session.tenant_id != ctx.tenant_id or session.project_id != payload.project_id:
         raise HTTPException(status_code=404, detail="Session not found")
     event = ExecutionEvent(
-        tenant_id=ctx.tenant_id, **payload.model_dump(exclude={"attributes"}), attributes=attributes
+        tenant_id=ctx.tenant_id,
+        **payload.model_dump(exclude={"attributes", "api_url"}),
+        attributes=attributes,
     )
     db.add(event)
     db.flush()
@@ -310,6 +315,54 @@ def list_negative_case_analyses(
         for run in runs
         if run.metrics.get("negative_case_analysis")
     ]
+
+
+def _judge_run_response(run: GlobalEvaluationRun) -> dict:
+    metrics = run.metrics or {}
+    return {
+        "run_id": str(run.id),
+        "definition_id": str(run.definition_id),
+        "judge_provider": run.judge_provider,
+        "status": run.status,
+        "passed": run.passed if run.status in {"PASSED", "FAILED"} else None,
+        "reliability_score": metrics.get("reliability_score"),
+        "created_at": run.created_at,
+        "blockers": run.blockers,
+        "analysis": metrics.get("negative_case_analysis", []),
+        "user_action_requests": metrics.get("user_action_requests", []),
+    }
+
+
+@app.get("/v1/judge/runs")
+def list_judge_runs(
+    limit: int = Query(default=20, ge=1, le=100),
+    ctx: TenantContext = Depends(require_tenant),
+    db: Session = Depends(get_db),
+):
+    runs = db.scalars(
+        select(GlobalEvaluationRun)
+        .where(GlobalEvaluationRun.tenant_id == ctx.tenant_id)
+        .order_by(GlobalEvaluationRun.created_at.desc())
+        .limit(limit)
+    ).all()
+    return [_judge_run_response(run) for run in runs]
+
+
+@app.get("/v1/judge/runs/{run_id}")
+def get_judge_run(
+    run_id: UUID,
+    ctx: TenantContext = Depends(require_tenant),
+    db: Session = Depends(get_db),
+):
+    run = db.scalar(
+        select(GlobalEvaluationRun).where(
+            GlobalEvaluationRun.id == run_id,
+            GlobalEvaluationRun.tenant_id == ctx.tenant_id,
+        )
+    )
+    if run is None:
+        raise HTTPException(status_code=404, detail="Judge run not found")
+    return _judge_run_response(run)
 
 
 @app.post("/v1/risk/evaluate")

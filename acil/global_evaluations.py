@@ -60,6 +60,7 @@ def run_global_evaluation(
     tenant_id: UUID,
     judge_provider: str = "deterministic",
     judge=None,
+    existing_run: GlobalEvaluationRun | None = None,
 ) -> GlobalEvaluationRun:
     selected_judge = judge or (
         KimiK3ChatJudge()
@@ -78,25 +79,33 @@ def run_global_evaluation(
     blockers = list(dict.fromkeys(result.blockers + deterministic_result.blockers))
     if result.passed and not deterministic_result.passed:
         blockers.append("deterministic_evidence_gate_failed")
-    run = GlobalEvaluationRun(
+    run = existing_run or GlobalEvaluationRun(
         definition_id=definition.id,
         tenant_id=tenant_id,
         judge_provider=selected_judge.provider,
-        status="PASSED" if passed else "FAILED",
-        passed=passed,
+        status="RUNNING",
+        passed=False,
         observed_actions=observed_actions,
-        metrics={
-            **result.metrics,
-            "improvement_suggestions": result.improvement_suggestions,
-            "user_action_requests": result.user_action_requests,
-            "negative_case_analysis": result.negative_case_analysis,
-            "deterministic_evidence_gate_passed": deterministic_result.passed,
-        },
-        blockers=blockers,
+        metrics={},
+        blockers=[],
         evidence=evidence,
         created_at=datetime.now(UTC),
     )
-    db.add(run)
+    run.judge_provider = selected_judge.provider
+    run.status = "PASSED" if passed else "FAILED"
+    run.passed = passed
+    run.observed_actions = observed_actions
+    run.metrics = {
+        **result.metrics,
+        "improvement_suggestions": result.improvement_suggestions,
+        "user_action_requests": result.user_action_requests,
+        "negative_case_analysis": result.negative_case_analysis,
+        "deterministic_evidence_gate_passed": deterministic_result.passed,
+    }
+    run.blockers = blockers
+    run.evidence = evidence
+    if existing_run is None:
+        db.add(run)
     db.flush()
     candidate = db.scalar(
         select(GlobalStrategyCandidate).where(

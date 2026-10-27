@@ -201,6 +201,65 @@ def test_event_batch_is_idempotent_and_trace_is_ordered(tmp_path, monkeypatch):
     assert [item["event_id"] for item in trace.json()] == ["e-1", "e-2"]
 
 
+def test_top_level_api_url_is_normalized_and_not_stored_raw(tmp_path, monkeypatch):
+    client = setup_client(tmp_path, monkeypatch)
+    headers = {"Authorization": "Bearer key-a"}
+    project = client.post(
+        "/v1/projects", headers=headers, json={"name": "API target", "slug": "api-target"}
+    ).json()
+    event = {
+        "event_id": "top-level-api-url",
+        "project_id": project["id"],
+        "session_id": str(uuid4()),
+        "trace_id": "api-target-trace",
+        "span_id": "api-target-span",
+        "agent_type": "codex",
+        "event_type": "tool.failed",
+        "canonical_action": "CALL_API",
+        "status": "failed",
+        "timestamp": "2026-10-26T12:00:00Z",
+        "error_type": "api_call",
+        "api_url": "https://example.test/v1/items/123?token=secret",
+    }
+    assert client.post("/v1/events", headers=headers, json=event).status_code == 201
+    trace = client.get(
+        f"/v1/sessions/{event['session_id']}/trace", headers=headers
+    ).json()
+    attributes = trace[0]["attributes"]
+    assert attributes["api_target"]["path_template"] == "/v1/items/{id}"
+    assert "secret" not in str(attributes)
+    assert "api_url" not in attributes
+
+
+def test_command_text_api_url_is_detected(tmp_path, monkeypatch):
+    client = setup_client(tmp_path, monkeypatch)
+    headers = {"Authorization": "Bearer key-a"}
+    project = client.post(
+        "/v1/projects", headers=headers, json={"name": "Command API", "slug": "command-api"}
+    ).json()
+    event = {
+        "event_id": "command-api-url",
+        "project_id": project["id"],
+        "session_id": str(uuid4()),
+        "trace_id": "command-api-trace",
+        "span_id": "command-api-span",
+        "agent_type": "codex",
+        "event_type": "command_execution",
+        "canonical_action": "RUN_COMMAND",
+        "status": "failed",
+        "timestamp": "2026-10-26T12:05:00Z",
+        "error_type": "api_call",
+        "command": "curl https://api.example.test/v1/items/123?token=secret",
+    }
+    assert client.post("/v1/events", headers=headers, json=event).status_code == 201
+    trace = client.get(
+        f"/v1/sessions/{event['session_id']}/trace", headers=headers
+    ).json()
+    attributes = trace[0]["attributes"]
+    assert attributes["api_target"]["path_template"] == "/v1/items/{id}"
+    assert "curl" not in str(attributes)
+
+
 def test_failures_group_by_observed_fingerprint_and_are_tenant_scoped(tmp_path, monkeypatch):
     client = setup_client(tmp_path, monkeypatch)
     headers = {"Authorization": "Bearer key-a"}

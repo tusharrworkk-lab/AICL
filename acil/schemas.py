@@ -1,7 +1,7 @@
 from datetime import datetime
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class ProjectCreate(BaseModel):
@@ -32,7 +32,34 @@ class EventIn(BaseModel):
     timestamp: datetime
     duration_ms: int | None = Field(default=None, ge=0)
     error_type: str | None = Field(default=None, max_length=100)
+    # Convenience input accepted by integrations. The value is normalized into
+    # attributes.api_target before persistence; the raw URL is never stored.
+    api_url: str | None = Field(default=None, max_length=4_096, exclude=True)
     attributes: dict = Field(default_factory=dict)
+
+    @model_validator(mode="before")
+    @classmethod
+    def preserve_observable_tool_fields(cls, value):
+        """Move common Codex/CLI fields into bounded attributes for normalization."""
+        if not isinstance(value, dict):
+            return value
+        data = dict(value)
+        attributes = dict(data.get("attributes") or {})
+        for key in (
+            "command",
+            "cmd",
+            "arguments",
+            "input",
+            "output",
+            "result",
+            "error",
+            "request",
+            "response",
+        ):
+            if key in data and key not in attributes:
+                attributes[key] = data[key]
+        data["attributes"] = attributes
+        return data
 
 
 class EventBatch(BaseModel):
